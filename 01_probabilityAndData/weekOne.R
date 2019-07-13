@@ -1,4 +1,3 @@
-# //////////////////// WEEK ONE ////////////////////////
 library(dplyr)
 library(ggplot2)
 library(statsr)
@@ -22,3 +21,17 @@ ggplot(data = arbuthnot, aes(x = year, y = boys / total)) + geom_point()
 arbuthnot <- arbuthnot %>%
         mutate(more_boys = boys > girls)
 
+# LOAD DATA INTO ENVIRONMENT
+attach(present)
+# ADD TOTAL COLUMN
+present <- present %>%
+        mutate(total = boys + girls)
+# ADD LOGICAL 'BOYS > GIRLS' COLUMN (T/F)
+present <- present %>%
+        mutate(more_boys = boys > girls)
+# ADD PROPORTION OF BOYS / GIRLS COLUMN
+present <- present %>%
+        mutate(prop_boy_girl = boys / girls)
+# GET HIGHEST BIRTH RATE YEAR
+present <- present[order(present$total, decreasing = TRUE), ]
+present$year[1]
