@@ -1,8 +1,68 @@
+---
+title: "Exploring the BRFSS data"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
 library(ggplot2)
 library(dplyr)
-load("brfss2013.RData")
+```
 
-# Does fruit and vegetable consumption differ reliably by state?
+### Load data
+
+Make sure your data and R Markdown files are in the same directory. When loaded
+your data file will be called `brfss2013`. Delete this note when before you submit 
+your work. 
+
+```{r load-data}
+load("brfss2013.RData")
+```
+
+
+
+* * *
+
+## Part 1: Data
+BRFSS is a national telephone survey implemented by the CDC. Data is collected from > 400,000 American adults annually.
+While it is an exceptionally large sample, its findings cannot be considered universally generalizable for two reasons.
+
+1. Data is collected by phone. Individuals who do not have access to a phone cannot be included.
+2. Data is only collected from American adults.
+
+* * *
+
+## Part 2: Research questions
+
+**Research quesion 1:**
+Does fruit and vegetable consumption differ reliably by state?
+
+**Research quesion 2:**
+Does income predict poor physical or mental health?
+
+**Research quesion 3:**
+Does partisan legislative control predict health outcomes for their constituents?
+
+Data sourced from https://ballotpedia.org/Partisan_composition_of_state_legislatures
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+NOTE: Insert code chunks as needed by clicking on the "Insert a new code chunk" 
+button (green button with orange arrow) above. Make sure that your code is visible
+in the project you submit. Delete this note when before you submit your work.
+
+**Research quesion 1:**
+
+```{r}
 exploreNutrition <- data.frame(brfss2013$X_state, brfss2013$X_frutsum, brfss2013$X_vegesum)
 exploreNutrition <- exploreNutrition[complete.cases(exploreNutrition), ]
 colnames(exploreNutrition) <- c('state','fruitSum','vegSum')
@@ -15,18 +75,25 @@ exploreNutrition %>%
         group_by(state) %>%
         summarise(averageNutrientIntake = mean(nutrientIntake), n = n()) %>%
         arrange(averageNutrientIntake)
-
+```
+```{r}
 # High to Low
 exploreNutrition %>%
         group_by(state) %>%
         summarise(averageNutrientIntake = mean(nutrientIntake), n = n()) %>%
         arrange(desc(averageNutrientIntake))
+```
 
+```{r}
 ggplot(data = exploreNutrition, aes(x = factor(state), y = nutrientIntake)) + 
         geom_boxplot() + 
         theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
 
-# Does income predict poor physical or mental health?
+
+**Research quesion 2:**
+
+```{r}
 exploreIncome <- data.frame(brfss2013$X_state, brfss2013$employ1, brfss2013$income2, brfss2013$poorhlth)
 colnames(exploreIncome) <- c('state','employmentStatus','incomeLevel','poorHealth')
 
@@ -36,14 +103,18 @@ exploreIncome %>%
         group_by(incomeLevel) %>%
         summarise(averagePoorHealthDays = mean(poorHealth)) %>%
         arrange(desc(averagePoorHealthDays))
+```
 
+```{r}
 ggplot(exploreIncome, aes(x = incomeLevel, y = poorHealth)) +
         geom_boxplot() +
         theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 7))
+```
+These data clearly show a trend in economic status predicting mental and physical health outcomes, such that more income yields lower rates of health problems.
 
-# Does partisan legislative control predict health outcomes for their constituents?
-browseURL('https://ballotpedia.org/Partisan_composition_of_state_legislatures')
+**Research quesion 3:**
 
+```{r}
 blueStates <- c('Washington','Oregon','California','Nevada','Colorado','New Mexico',
                 'Illinois','Maryland','Delaware','New Jersey','New York','Connecticut',
                 'Massachusets','Rhoad Island','Vermont','New Hampshire','Maine')
@@ -61,5 +132,11 @@ explorePolitics %>%
         summarise(satisfaction = sum(careReceived == 'Very satisfied'), satisfactionRate = (satisfaction / n()), n = n()) %>%
         arrange(desc(satisfaction))
 
+```
+
+```{r}
 ggplot(explorePolitics, aes(x = careReceived, fill = statePolitics)) + 
         geom_bar()
+
+```
+These data suggest that Republican states have higher rates of healthcare satisfaction relative to Democratic states.
