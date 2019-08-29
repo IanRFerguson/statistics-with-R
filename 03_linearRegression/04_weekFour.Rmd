@@ -1,0 +1,229 @@
+---
+title: "Modeling And Prediction for Movies"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+```
+
+### Load data
+```{r load-data}
+load("movies.Rdata")
+```
+
+
+
+* * *
+
+## Part 1: Data
+The data set is comprised of 651 randomly sampled movies produced and released before 2016.
+
+```{r}
+str(movies)
+```
+
+<br>Since <b><i>random sampling</i></b> was utilized in obtaining these data, it is appropriate to suggest that any significant findings in this analysis would be generalizable. Similarly, the observational nature of these data negates any opportunity for random assignment.
+
+* * *
+
+## Part 2: Research question
+The following data analysis will seek to investigate how various factors - month, year, run time, title type, and genre - ultimately predict a film's critical reception.<br>
+
+* * *
+
+## Part 3: Exploratory data analysis
+First, we will need to construct a composite variable that captures IMDB and Rotten Tomatoes scores. Since this is a univariate regression analysis, we will use one response variable to broadly capture each film's critical reception.<br>
+
+```{r}
+movies <- movies %>%
+        mutate(total_rating = (imdb_rating + critics_score + audience_score))
+```
+
+Next, we'll plot the distribution of scores to observe the shape and spread of responses.<br>
+
+```{r}
+summary(movies$total_rating)
+
+ggplot(data = movies, aes(x = total_rating)) +
+        geom_histogram()
+```
+
+There is considerable spread in ratings responses, with a minimum of 16.40 and maximum of 203.00.
+
+```{r}
+movies %>%
+        filter(total_rating == 16.40) %>%
+        summarise(title = title)
+```
+
+Hopefully the creators of Battlefield Earth didn't quit their day jobs.<br><br>
+
+Next, we'll take a quick look at the summary statistics for each variable of interest.<br>
+
+```{r}
+summary(movies$runtime)
+
+ggplot(data = movies, aes(x = runtime)) +
+        geom_histogram()
+```
+
+<br>This plot suggests that 50% of films have a run time between 92 and 115.8 minutes, and an average run time of 105.8 minutes (or ~1.76 hours).<br>
+<br>This plot also indicates some definite outliers, with several films running longer than 200 minutes. We will keep this in mind when constructing our linear model.<br>
+
+```{r}
+movies %>%
+        group_by(genre) %>% 
+        tally()
+
+ggplot(data = movies, aes(x = factor(thtr_rel_month), fill = genre)) +
+        geom_bar()
+
+ggplot(data = movies, aes(x = factor(thtr_rel_month), fill = title_type)) +
+        geom_bar()
+```
+<br>These data suggest that <b>January, June, October, and December</b> are all very popular release months for films, with <b>June</b> being the most popular month.<br>
+
+<br>In addition, <b>Drama films</b> are clearly the most popular, followed by <b>Comedy</b> and <b>Action & Adventure</b>.<br><br>
+
+<br>Feature films are clearly the most common type of film released, but we'll include all three types in our analysis.<br><br>
+
+<br>Finally, let's examine the corrleation coefficients for each of the selected variables.<br>
+
+```{r}
+movies %>% 
+        na.omit() %>% 
+        summarise(monthCor = cor(total_rating, thtr_rel_month),
+                  runCor = cor(total_rating, runtime))
+```
+
+<br>These results suggest that, while run time is moderately correlated with total scores, month of release is barely correlated with total scores.<br>
+
+* * *
+
+## Part 4: Modeling
+To assess the predictive power of release month, running time, and genre on critical reception, we'll construct a univariate linear regression model.<br>
+
+```{r}
+m1 <- lm(total_rating ~ thtr_rel_month + thtr_rel_year + runtime + genre + title_type + 
+                 best_pic_nom + best_pic_win + best_actor_win + best_actress_win + 
+                 best_dir_win, data = movies)
+
+summary(m1)
+
+```
+
+<br>There are two notable characteristics of this first model:<br><br>
+<b>1.</b> The p-value of the model as a whole is very low, suggesting significance <i>somewhere</i> in the model.<br>
+<b>2.</b> Several factors included in the model are not-significant.<br>
+
+<br>Our first option here is to remove the highest (i.e., least-significant) regressors.<br>
+
+<br>First, we'll remove the regressor with the highest p-value: best_pic_win<br>
+
+```{r}
+m1 <- lm(total_rating ~ thtr_rel_month + thtr_rel_year + runtime + genre + title_type + 
+                 best_pic_nom + best_actor_win + best_actress_win + 
+                 best_dir_win, data = movies)
+
+summary(m1)$adj.r.squared
+```
+
+<br>Removing best_pic_win increased the Adjusted R-squared, albeit marginally. We'll remove the next p-value: best_actress_win. <br><br>
+
+```{r}
+m1 <- lm(total_rating ~ thtr_rel_month + thtr_rel_year + runtime + genre + title_type + 
+                 best_pic_nom + best_actor_win + best_dir_win, data = movies)
+
+summary(m1)$adj.r.squared
+```
+
+<br>Again, a slight improvement. We'll remove thtr_rel_month next.<br>
+
+```{r}
+m1 <- lm(total_rating ~  thtr_rel_year + runtime + genre + title_type + 
+                 best_pic_nom + best_actor_win + best_dir_win, data = movies)
+
+summary(m1)$adj.r.squared
+```
+
+<br>Lastly, we'll try removing best_actor_win.<br>
+
+```{r}
+m1 <- lm(total_rating ~  thtr_rel_year + runtime + genre + title_type + 
+                 best_pic_nom + best_dir_win, data = movies)
+
+summary(m1)$adj.r.squared
+```
+
+<br>This is the best model we've seen yet, and it should work for our purposes.<br>
+
+<br><mark><b>*Please Note*</b></mark>that the 'genre' variable remains in the model, since the majority of its factors are significant predictors of critical reception.<br>
+
+### Conditions Check
+Before we move forward, we must check to see that the residuals in this model are nearly normal and randomly scattered.<br>
+
+```{r}
+ggplot(data = m1, aes(x = .fitted, y = .resid)) +
+        geom_point() +
+        geom_hline(yintercept = 0)
+
+ggplot(data = m1, aes(x = .resid)) +
+        geom_histogram()
+
+```
+
+<br>The histogram shows nearly normal residuals with a center near 0. We can trust that the conditions for MLR have been met.<br>
+
+
+* * *
+
+## Part 5: Prediction
+```{r}
+starWars <- data.frame(thtr_rel_year = 2016,
+                       runtime = 133,
+                       genre = 'Science Fiction & Fantasy',
+                       title_type = 'Feature Film',
+                       best_pic_nom = 'no',
+                       best_dir_win = 'no')
+
+predict(m1, starWars)
+```
+
+<br>Based on our linear model, Star Wars should receive a combined rating of 101.6319.<br>
+<br>Next, let's see what the actual observed ratings for the film were:<br><br>
+
+<b>Rotten Tomatoes:</b> 84 + 86<br>
+<b>IMDB:</b> 7.8 <br>
+<b>Total:</b> 177.8 <br><br>
+
+<br>This yields a residual score of <b>76.17</b>.<br>
+
+```{r}
+summary(m1$residuals)
+```
+
+<br>This model summary suggests that, while 76.17 is a high residual score, it is not unheard of in the scope of this model.<br> 
+
+* * *
+
+## Part 6: Conclusion
+Ultimately, this model is only a fair predictor of critical reception.<br>
+
+```{r}
+summary(m1)$adj.r.squared
+```
+
+<br>This value suggests that 29.05% of the variability in critical reception can be accounted for by the model. 
+<br>While this is not an especially robust figure, it is certainly better than a random guess. 
+<br>In the context of the question at hand, this model should be utilized as a non-exclusive tool in estimating a film's commercial success.<br>
