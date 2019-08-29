@@ -1,0 +1,133 @@
+---
+title: "Statistical inference with the GSS data"
+output: 
+  html_document: 
+    fig_height: 4
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+```
+
+### Load data
+
+```{r load-data}
+load("gss.Rdata")
+```
+
+* * *
+
+## Part 1: Data
+Since 1972, the General Social Survey (GSS) has been monitoring societal change and studying the growing complexity of American society. The GSS aims to gather data on contemporary American society in order to monitor and explain trends and constants in attitudes, behaviors, and attributes; to examine the structure and functioning of society in general as well as the role played by relevant subgroups; to compare the United States to other societies in order to place American society in comparative perspective and develop cross-national models of human society; and to make high-quality data easily accessible to scholars, students, policy makers, and others, with minimal cost and waiting.
+
+GSS questions cover a diverse range of issues including national spending priorities, marijuana use, crime and punishment, race relations, quality of life, confidence in institutions, and sexual behavior.
+```{r}
+str(gss)
+```
+<br><b>Does it generalize?</b><br>
+
+This sample is made up of several decades of randomly sampled Americans - the results of this research certainly generalize to the general population.
+There are no obvious sources of bias in this sample.<br><br>
+
+<b>Causality?</b><br>
+
+Since random assignment was not used in this sample, causality cannot be inferred.<br>
+* * *
+
+## Part 2: Research question
+American gun culture has dominated the country's political landscape for generations (a brief history of gun control laws in the United States can be found <a href='https://time.com/5169210/us-gun-control-laws-history-timeline/' target = "_blank">here</a>). Broadly speaking, Conservatives have typically rejected or repealed gun control laws in favor of citizens' 2nd Amendment rights - conversely, Liberals have often pushed for gun control laws.<br><br>
+
+Similarly, Liberals have more often supported large-scale government integration into daily American life than their Conservative counterparts. This phenomenon is clearly on display throughout the 2020 Primary debates, with major government initiatives such as the Green New Deal and Medicare for All dominating the political landscape.<br><br>
+
+The present analysis will investigate the relationship between <b>gun ownership</b> and <b>support for the government</b>.<br><br>
+
+Given what we know about contemporary American politics, we anticipate gun owners to be less likely to support the government and non-owners more likely to support the government.<br><br>
+* * *
+
+## Part 3: Exploratory data analysis
+
+```{r}
+workingData <- gss[!gss$owngun == 'NA', ]
+workingData <- workingData[!workingData$owngun == 'Refused', ]
+workingData <- workingData[!workingData$helpnot == 'Agree With Both', ]
+
+workingData %>%
+        group_by(owngun) %>%
+        summarise(sample = n(), 
+                  supportGov = (sum(helpnot == 'Govt Do More', na.rm = T)), 
+                  rejectGov = (sum(helpnot == 'Govt Does Too Much', na.rm = T)))
+
+
+```
+<br>
+Clearly the sample of non-owners is larger than the sample of gun owners, but how meaningful is this difference? 
+
+To examine further, we'll observe the proportion of owners / non-owners as it relates to political opinion.
+<br>
+```{r}
+workingData %>%
+        group_by(owngun) %>%
+        summarise(sample = n(), 
+                  supportProportion = (sum(helpnot == 'Govt Do More', na.rm = T) / n()), 
+                  rejectProportion = (sum(helpnot == 'Govt Does Too Much', na.rm = T) / n()))
+```
+<br>
+Interestingly, these proportions appear to be nearly inverse when examined casually. 65.4% of non-owners support the government, while 68.6% of gun owners believe the government should do less.
+<br>
+<br>
+```{r}
+ggplot(data = subset(workingData, !is.na(helpnot)), aes(x = helpnot, fill = owngun)) +
+        geom_bar() + 
+        labs(x = 'Support for Government',
+             title = 'Gun Ownership vs. Support for Government')
+
+```
+<br>
+The observed fill values lend cautious support for the hypothesis - generally, non-owners believe the government should do more to account for citizen's livelihood, while gun owners generally believe the government does too much.<br>
+
+* * *
+
+## Part 4: Inference
+
+We are ultimately interested in testing for independence in  resposes of governmental support between gun owners and non-owners.<br><br>
+
+Since both of these variables are <b>categorical</b>, it is appropriate to use a <b><mark>Chi-Square Test of Independence</mark></b>.<br><br>
+
+### Condition Checks
+
+<b> 1. Independence: </b> It is safe to assume that each observation is independent, considering the breadth of the sample <br>
+<b> 2. Size: </b> There are > 5 cases per condition, which suggests that conducting a Chi-Square test is appropriate.<br><br>
+
+Since a Chi-Square Test of Independence is non-parametric, confidence intervals are not included in this analysis.<br>
+
+```{r}
+workingData %>%
+        group_by(year) %>%
+        summarise(sampleSize = n())
+        
+```
+
+### Chi-Square Test of Independence
+
+The two categorical variables in question are Gun Ownership (Yes / No) and belief that the Government does (Too Much / Not Enough).<br><br>
+
+<b>Ho:</b> Gun ownership and support for the government are independent responses. <br>
+<b>Ha:</b> Gun ownership and support for the government are dependent (or related) responses. <br><br>
+
+Since we are grouping reponses on whether or not the participant is a gun owner, support for the government will serve as the <b>response variable</b> and gun ownership will serve as the <b>explanatory variable</b>.
+<br>
+
+```{r}
+inference(y = helpnot, x = owngun, data = workingData, type = 'ht', statistic = 'proportion', 
+          success = 'Govt Do More', method = 'theoretical', alternative = 'greater')
+```
+<br>
+With a high Chi-Square statistic and low <i>p</i>-value, we have sufficient evidence to <b>Reject the Null Hypothesis</b> that gun ownership and support for the government are independent responses.<br>
