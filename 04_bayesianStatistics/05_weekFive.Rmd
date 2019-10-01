@@ -1,0 +1,335 @@
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(statsr)
+library(BAS)
+library(broom)
+library(MASS)
+```
+
+### Load data
+
+```{r load-data}
+load("movies.Rdata")
+```
+
+* * *
+
+## Part 1: Data
+<i>Congratulations on getting a job as a data scientist at Paramount Pictures! Please see the Data Analysis Project for your assignment. Below you will find the files that you will need. Your boss has just acquired data about how much audiences and critics like movies as well as numerous other variables about the movies. This dataset is provided below, and it includes information from Rotten Tomatoes and IMDB for a random sample of movies. She is interested in learning what attributes make a movie popular. She is also interested in learning something new about movies. She wants you team to figure it all out.</i>
+
+<br>The following data analysis will seek to offer clarity as to the predictive factors for successful films. We will be using <b>Bayesian regression</b> to explore which variables have the most combined power to predict a film's success.<br>
+
+```{r}
+head(movies)
+dim(movies)
+```
+<br>The present analysis will seek to identify qualities in motion pictures that significantly predict their popularity and critical reception.
+<br>
+<br><i>"The data set is comprised of 651 randomly sampled movies produced and released before 2016."</i><br>
+<br>The present data set is large and randomly sampled - it is appropriate to assert that results in the present analysis <b>are generalizable</b>.
+<br>
+<br>However, as random assignment was <u>not</u> utilized <b><i>it is inappropriate to determine causality in the present analysis.</i></b>
+
+* * *
+
+## Part 2: Data manipulation
+
+We will need to create some new variables in order to accurately and efficiently construct a regression model. We will construct five categrocial variables based on month of theater release, genre, MPAA rating, and whether or not the film in question is a Feature film.<br>
+
+```{r}
+movies <- movies %>%
+        mutate(feature_film = ifelse(title_type == 'Feature Film', 'yes','no'),
+               drama = ifelse(genre == 'Drama', 'yes', 'no'),
+               mpaa_rating_r = ifelse(mpaa_rating == 'R', 'yes','no'))
+
+movies <- movies %>%
+        mutate(oscar_season = ifelse(thtr_rel_month == c(10,11,12), 'yes', 'no'))
+
+movies <- movies %>%
+        mutate(summer_season = ifelse(thtr_rel_month == c(5,6,7,8), 'yes', 'no'))
+               
+dim(movies)
+```
+
+### Spot-check to Confirm Variable Manipulation
+
+
+```{r}
+movies %>%
+        filter(thtr_rel_month == c(5,6,7,8)) %>%
+        summarise(summer = sum(summer_season == 'yes'), n = n())
+
+movies %>%
+        filter(thtr_rel_month == c(10,11,12)) %>%
+        summarise(oscar = sum(oscar_season == 'yes'), n = n())
+```
+
+* * *
+
+## Part 3: Exploratory data analysis
+<br>We will begin our analysis by plotting and analyzing the distributions of audience scores relative to our variables of interest. Subsequently, we will compare the overall distribution of audience scores with stratified distributions of explanatory variables.<br>
+
+### Audience Score Distribution (Total)
+
+```{r histogram: all movie data}
+ggplot(movies, aes(x = audience_score)) +
+        geom_histogram(binwidth = 1, fill = 'red', color = 'white', alpha = 0.4)
+
+summary(movies$audience_score)
+```
+
+<br>Broadly, audience scores in the present dataset are slightly right-skewed and nearly bimodal. An IQR of 34.00 suggests that 50% of audience scores are between 46.00 and 80.00, which suggests that 50% of the data is split between the high- and low-ends of the distribution (i.e., lower than 46.00 and higher than 80.00).
+<br>
+<br>Next, we will overlay the distribution of audience scores for Oscar-season films (those released October - December) with the distribution of scores for films released at other times of the year.
+<br>
+
+### Audience Score by Oscar Season
+```{r histogram: oscar szn}
+ggplot(movies, aes(x = audience_score, fill = oscar_season, color = oscar_season)) +
+        geom_histogram(binwidth = 1, alpha = 0.7, color = 'white',
+                       position = 'identity')
+
+movies %>%
+        group_by(oscar_season) %>%
+        summarise(median = median(audience_score), mean = mean(audience_score), iqr = IQR(audience_score), 
+                  range = max(audience_score) - min(audience_score), n = n())
+```
+
+<br>Here, we explore the distribution of films released during Oscar Season (October - December), compared with the larger population.
+<br>
+<br>We can see that Oscar Season films are similarly distributed (slightly right-skewed and bimodal). Additionally, we see several audience scores for Oscar Season films that may be statistical outliers - we'll check for this when modeling the data.
+<br>
+<br>
+
+### Audience Score by Feature Film
+```{r histogram: feature film}
+ggplot(movies, aes(x = audience_score, fill = feature_film, color = feature_film)) +
+        geom_histogram(binwidth = 1, alpha = 0.6,
+                       position = 'dodge')
+
+movies %>%
+        group_by(feature_film) %>%
+        summarise(median = median(audience_score), mean = mean(audience_score), iqr = IQR(audience_score), 
+                  range = max(audience_score) - min(audience_score), n = n())
+```
+
+<br>Casually observing the data, it seems that non-Feature Films are rated much higher on average than Feature Films (mean 81.05 and 60.47 respectively).
+<br>
+<br>This may be due to their relative novelty both in the dataset (only 60 observations) and in theaters. An early explanation may be that movie-goers appreciate novelty at the cinema, and thus rate non-Feature Films higher.
+<br>
+<br>Notably, the non-Feature Film distribution appears to be heavily left-skewed, with several possible outliers occupying the left-hand side of the histogram. We will account for outliers when constructing and testing the regression model.
+<br>
+
+### Audience Score by R Rating
+```{r histogram: rated r}
+ggplot(movies, aes(x = audience_score, fill = mpaa_rating_r, color = mpaa_rating_r)) +
+        geom_histogram(binwidth = 1, alpha = 0.5,
+                       position = 'dodge')
+
+movies %>%
+        group_by(mpaa_rating_r) %>%
+        summarise(median = median(audience_score), mean = mean(audience_score), iqr = IQR(audience_score), 
+                  range = max(audience_score) - min(audience_score), n = n())
+
+```
+
+<br>Even at first look, having an MPAA rating of 'R' appears to be less predictive of audience reception than other factors explored in this analysis.
+<br>
+<br>Nearly identical median values (65.5 and 64.0 for non-R and R films respectively) and comparable IQRs suggest that there is little difference between audience scores for films that are rated R and those that are not.
+<br>
+<br>We'll take this one step further and plot the relationship between R rating and audience score, to give our hypothesis some analytical foundation.
+<br>
+```{r}
+ggplot(movies, aes(x = mpaa_rating_r, y = audience_score, color = mpaa_rating_r)) +
+        geom_jitter(width = 0.2, alpha = 0.7) +
+        labs(x = "MPAA Rated R (No / Yes)", y = "Audience Score")
+```
+<br>
+<br>As we casually suspected, `mpaa_rating_r` does not appear to be significantly predictive of a film's success. We'll test this hypotehsis in the model selection stage of the analysis.
+<br>
+
+* * *
+
+## Part 4: Modeling
+<br>In order to accurately be able to predict a film's critical success, we will need to explore relevant variables in the dataset at first. Then, using Bayesian regression methods, we can check for outliers and remove variables as neccesary.
+<br>
+<br>First, we will scrape the variables of interest from the main .Rdata file and place it in a new dataframe object. This will allow for more efficient modeling moving forward.
+<br>
+<br>Next, we'll fit a linear regression model to predict audience score by <b><i>all</i></b> other exploratory variables. Then, we'll use the `augment` function to turn the linear model into a dataframe, which we can use to test for any abnromalities in the distribution.
+<br>
+
+```{r}
+cleanMovies <- movies[, c("audience_score", "feature_film", "drama", "runtime", "mpaa_rating_r", "thtr_rel_year", "oscar_season", "summer_season", "imdb_rating", "imdb_num_votes", "critics_score", "best_pic_nom", "best_pic_win", "best_actor_win", "best_actress_win", "best_dir_win", "top200_box")]
+
+filmModel <- lm(audience_score ~ . -audience_score, data = na.omit(cleanMovies))
+
+filmModel_augmented <- augment(filmModel)
+
+tidy(filmModel)
+```
+
+
+### Normality Checks
+```{r}
+ggplot(filmModel_augmented, aes(x = .fitted, y = .resid)) +
+        geom_point(alpha = 0.45, color = 'blue') +
+        geom_hline(yintercept = 0) +
+        labs(x = 'Fitted Values', y = 'Residuals')
+
+ggplot(filmModel_augmented, aes(x = .resid)) +
+        geom_histogram(binwidth = 1, color = 'white', fill = 'red', alpha = 0.5) +
+        labs(x = 'Residuals', y = 'Count') 
+
+```
+
+<br>
+<br>Given the <b>nearly-normal distribution of reisudals</b> and <b>center around zero</b> in this model, <b><u>we can assume normality in the present model</u></b>.
+<br>
+<br>Next, we will check for <b>statistical outliers</b>.
+<br>We will assume that any observation greater than 3 standard deviations from the mean will be qualified as an outlier.
+<br>Outliers will be assessed using the `Bayes.outlier` function, with `k = 3` (i.e., 3 standard deviations).
+
+```{r outliers}
+outliers <- Bayes.outlier(filmModel, k = 3)
+
+outliers_DF <- data.frame(case = 1:length(outliers$prob.outlier),
+                          probability = outliers$prob.outlier)
+
+ggplot(outliers_DF, aes(x = case, ymax = probability)) +
+        geom_linerange(ymin = 0) +
+        labs(y = 'Probability')
+
+```
+
+
+<br>We will filter out any data points with outlier probability greater than or equal to 0.50 - in other words, those points with greater than 50% likelihood of being an outlier.
+<br>
+
+```{r}
+outliers_DF %>%
+        filter(probability >= 0.50)
+```
+
+<br>We return 0 observations with outlier probability > 0.50. Given the sample size, this result is not particularly unusual. We can safely move on to the model selection component of the analysis.
+<br>
+
+### Model Selection
+
+Let's check the baseline BIC - that's `Bayesian Information Criteria` - score of our model. We will attempt to produce a model with the lowest possible BIC value.
+<br>
+
+```{r}
+BIC(filmModel)
+```
+<br>The baseline model - including all variables - gives us a BIC value of 4932.725. To find the best model fit (i.e., the model with the highest <b><i>predictive ability</i></b>), we'll attempt to remove several variables from the model. We can accomplish this using the `stepAIC` function in the BAS package, which will systematically remove variables until we yield a model with the lowest AIC.
+<br>
+```{r}
+n <- nrow(cleanMovies)
+
+filmModel.step <- step(filmModel, k = log(n))
+```
+<br>We see that by including only select variables, the ultimate predictative efficacy of the model increases substantially.
+<br>The lowest possible AIC value will be fit to a new model, named `updated_filmModel`. This model will also give us a lower BIC than the full model observed earlier.
+<br>
+```{r}
+updated_filmModel <- lm(audience_score ~ runtime + imdb_rating + critics_score, data = na.omit(cleanMovies))
+
+BIC(updated_filmModel)
+
+summary(updated_filmModel)
+```
+<br>We'll follow the <b><i>same steps</i></b> as before to confirm normality in the given model, as well as testing for outliers.
+<br>
+
+```{r}
+UA_filmModel <- augment(updated_filmModel)
+
+ggplot(UA_filmModel, aes(x = .fitted, y = .resid)) +
+        geom_point(color = 'blue', alpha = 0.5) +
+        geom_hline(yintercept = 0)
+
+ggplot(UA_filmModel, aes(x = .resid)) +
+        geom_histogram(binwidth = 1, color = 'white', fill = 'red', alpha = 0.4) +
+        labs(x = 'Residuals')
+
+```
+
+```{r}
+updated_outliers <- Bayes.outlier(updated_filmModel, k = 3)
+
+updated_outliers_DF <- data.frame(case = 1:length(updated_outliers$prob.outlier),
+                          probability = updated_outliers$prob.outlier)
+
+ggplot(updated_outliers_DF, aes(x = case, ymax = probability)) +
+        geom_linerange(ymin = 0) +
+        labs(y = 'Probability')
+
+updated_outliers_DF %>%
+        filter(probability > 0.50)
+```
+<br>There are <b><u>no outliers</u></b> observed in the current model, and the updated model has retained normality.
+<br>Of all possible models using the given criteria, this combination of predictive factors appears to have the highest predictive strength:
+
+```{r}
+names(updated_filmModel$coefficients)
+```
+
+* * *
+
+## Part 5: Prediction
+<br>To assess the predictive strength of our model, we'll test a film that is not included in the originial dataset. Specifically, we'll test the 2016 drama `"Moonlight"`. Given the sample size, we'll first check to confirm `"Moonlight"` was not in the dataset after all:
+
+```{r}
+which(movies$title == 'Moonlight')
+```
+<br>The original dataset did not contain this film, so it is appropriate to test it. See below for links to the film's online pages, where the following data will be collected:
+<br>
+<br><a href = 'https://www.imdb.com/title/tt4975722/' target = "_blank"><b><u>IMDB</u></b></a>   |   <a href = 'https://www.rottentomatoes.com/m/moonlight_2016' target = "_blank"><b><u>Rotten Tomatoes</u></b></a>
+<br>
+<br>Using information gathered from these sources, we can build an auxilary data set that can be used to test the Bayesian regression model built earlier in this analysis.
+```{r}
+moonlight <- data.frame(feature_film = 'yes',
+                        drama = 'yes',
+                        runtime = 110,
+                        mpaa_rating_r = 'yes',
+                        thtr_rel_year = 2016,
+                        summer_season = 'no',
+                        imdb_rating = 7.4,
+                        imdb_num_votes = 235413,
+                        critics_score = 98.00,
+                        best_pic_nom = 'yes',
+                        best_actress_win = 'no')
+
+predict(updated_filmModel, moonlight)
+
+```
+
+<br><mark><b>Actual Audience Score:</b></mark>    79.00 <br>
+
+```{r}
+78.57173 - 79.00
+
+sd(cleanMovies$audience_score)
+```
+
+<br>An observed difference of 2.3569 in audience scores (`test statistic - observed value`) is indicative of the strength of this model. The observed standard deviation for audience score in the present data (20.22262) suggests that the Bayesian regression model used in this analysis produced a test statistic well within the parameters of significance.
+<br>
+
+* * *
+
+## Part 6: Conclusion
+
+The combination of variables that ultimately offers us the most predictive power in this analysis is not wholly surprising. Individually, IMDB rating and critics score were the most significant regressors - this follows logically, as critically popular films with audiences are (usually) also generally well-received by critics and rated highly on IMDB.
+<br>
+<br>Interestingly, certain variables that were removed from this model (`top200_box`, `oscar_season`, and `best_actor_win`) are among the most intuitively important factors to a film's success. Their exclusion from the present model suggests that they do not signficantly predict audience's opinions or ratings of a film. Results of the present analysis also suggest that it is important to distinguish between <b>success at the box office</b> and <b>critical success from an audience</b>.
+<br>
+<br>Obstensibly, the leading-man Hollywood actor is not as important as we have been led to believe.
+
+### Potential Shortcomings + Future Directions
+
+The most notable shortcoming in this analysis was the use of the `stepwiseAIC` function used to find the highest predictive power of the model. This function penalizes the model for each additional variable that is removed, which in our case was 5 total variables. While we were able to obtain a robust model, using this method is somewhat dangerous. Had we failed to obtain a signficant model, it would have been logical to use a different criteria to select our model.
