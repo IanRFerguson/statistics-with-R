@@ -1,0 +1,325 @@
+---
+title: "Peer Assessment I"
+output:
+  html_document: 
+    pandoc_args: [
+      "--number-sections",
+    ]
+---
+
+
+First, let us load the data and necessary packages:
+
+```{r load, message = FALSE}
+load("ames_train.Rdata")
+attach(ames_train)
+library(MASS)
+library(dplyr)
+library(ggplot2)
+library(broom)
+library(tidyverse)
+library(leaps)
+```
+
+<br>
+This data set contains information from the Ames Assessor’s Office used in computing assessed values for individual residential properties sold in Ames, IA from 2006 to 2010. The present analysis will explore predictive variables that contribute to sale prices for homes in Ames.
+<br>
+
+
+#
+Make a labeled histogram (with 30 bins) of the ages of the houses in the data set, and describe the distribution.
+
+
+```{r Q1}
+ames_train %>%
+        summarise(mean = mean(Year.Built, na.rm = T), 
+                  median = median(Year.Built, na.rm = T),
+                  earliest = range(Year.Built)[1],
+                  latest = range(Year.Built)[2])
+
+ames_train <- ames_train %>% 
+        mutate(age = 2019 - Year.Built)
+
+ames_train %>% summarise(mean = mean(age, na.rm = T),
+                  median = median(age, na.rm = ))
+
+```
+
+```{r echo=FALSE, message=FALSE}
+ggplot(ames_train, aes(x = age)) +
+        geom_histogram(color = 'white') +
+        labs(title = "Distribution of Homes by Age",
+             x = "Age", 
+             y = "Count") 
+```
+
+
+* * *
+
+The present sample includes houses built between 1872 and 2010 - a significant range, by any metric. The right-skewedness of this distribution indicates a larger number of new homes than old homes. The average age in this sample is 46.8 years old, while the median is 44 years old.
+<br>
+<br>
+The distribution of build-year may be due to the generation cycle. There is a significant uptick in the volume of home building starting around 1950, which is likely due to the social climate of the U.S. at this time, as soliders were returning home from World War II and starting families (thus, necessitating homes). Similarly, there is a decline in homes built until the late 1990's, at which point Baby Boomers' children were grown and building homes of their own.
+
+* * *
+
+
+#
+The mantra in real estate is "Location, Location, Location!" Make a graphical display that relates a home price to its neighborhood in Ames, Iowa. Which summary statistics are most appropriate to use for determining the most expensive, least expensive, and most heterogeneous (having the most variation in housing price) neighborhoods? Report which neighborhoods these are based on the summary statistics of your choice. Report the value of your chosen summary statistics for these neighborhoods.
+
+
+```{r Q2}
+ames_train %>%
+        group_by(Neighborhood) %>%
+        summarise(median = median(price, na.rm = T),
+                  iqr = IQR(price, na.rm = T)) %>%
+        arrange(desc(median))
+
+
+```
+
+```{r echo=FALSE}
+ggplot(ames_train, aes(x = reorder(Neighborhood, +price), y = price)) +
+        geom_boxplot() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        labs(title = "Price by Neighborhood", x = "Neighborhood", y = "Price Range")
+```
+
+
+* * *
+
+Here, we see quite a spread between the least- and most-expensive houses in the present sample. Considering this range, we'll use <b>median</b> values per neighborhood to gain insight into their relative cost.<br>
+The <b>least-expensive</b> neighborhood, by median value, is <b>Meadow Village</b> ($85,750). <br>
+The <b>most-expensive</b>, by median value, is <b>Stone Brook</b> ($340,691). <br>
+The <b>most homogenous</b> neighborhood is Bluestem (IQR = 10250), while the <b>most variable</b> neighborhood is Stone Brook (IQR = 151358).
+<br>
+<br>
+In addition, there appears to be a relationship between price range and neighborhood, such that neighborhoods with higher mean prices also demonstrate more variability in price range. The two most expensive neighborhoods in this sample also have the largest price ranges (i.e., difference from most- to least-expensive). <br>
+
+* * *
+
+# 
+
+Which variable has the largest number of missing values? Explain why it makes sense that there are so many missing values for this variable.
+
+```{r Q3}
+q <- colSums(is.na(ames_train))
+
+head(sort(q, decreasing = T), 1)
+```
+
+
+* * *
+
+We see that the <b><i>Pool.QC</i></b> variable has the highest number of missing values. Without knowing much about this geographic area, pool quality would be a fairly intutive guess, as an overwhelming majority of U.S. homes do not have pools.
+
+* * *
+
+#
+
+We want to predict the natural log of the home prices. Candidate explanatory variables are lot size in square feet (Lot.Area), slope of property (Land.Slope), original construction date (Year.Built), remodel date (Year.Remod.Add), and the number of bedrooms above grade (Bedroom.AbvGr). Pick a model selection or model averaging method covered in the Specialization, and describe how this method works. Then, use this method to find the best multiple regression model for predicting the natural log of the home prices.
+
+
+```{r Q4}
+# Initial Model
+price.model <- lm(log(price) ~ Lot.Area + Land.Slope + Year.Built + Year.Remod.Add + Bedroom.AbvGr, data = ames_train)
+
+summary(price.model)
+
+anova(price.model)
+
+```
+
+* * *
+
+This initial, non-selected model is robust as is - an adjusted $R^2$ value of 0.5598 is an excellent start. We will attempt to improve this model using backward-selection, based on AIC (Akaike Information Critereon). In other words, we will start with a full model and will remove variables one by one until we yield the highest $R^2$ value.
+
+* * *
+
+#### $R^2$ to beat - 0.5598
+
+```{r echo = T, results='hide'}
+summary(lm(log(price) ~ Land.Slope + Year.Built + Year.Remod.Add + Bedroom.AbvGr, data = ames_train))
+# Yields lower R^2 ... 0.522
+
+summary(lm(log(price) ~ Lot.Area + Year.Built + Year.Remod.Add + Bedroom.AbvGr, data = ames_train))
+# Yields lower R^2 ... 0.553
+
+summary(lm(log(price) ~ Lot.Area + Land.Slope + Year.Remod.Add + Bedroom.AbvGr, data = ames_train))
+# Much lower R^2... 0.447
+
+summary(lm(log(price) ~ Lot.Area + Land.Slope + Year.Built + Bedroom.AbvGr, data = ames_train))
+# Lower R^2 ... 0.492
+
+summary(lm(log(price) ~ Lot.Area + Land.Slope + Year.Built + Year.Remod.Add, data = ames_train))
+# Yields lower R^2 ... 0.532
+```
+
+* * *
+
+We see that backward-selection does not yield a higher $R^2$ value that our base model. This suggests that the base model with all candidate variables has the highest predictive power. We'll confirm this using $step$ to apply a step-wise model selection function to the base model.
+
+* * *
+
+```{r}
+price.model.step <- step(price.model)
+
+summary(price.model.step)
+
+```
+
+```{r echo=FALSE, message=FALSE}
+price.model.step_aug <- augment(price.model.step)
+
+ggplot(price.model.step_aug, aes(x = .fitted, y = .resid)) +
+        geom_point(alpha = 0.7) +
+        geom_hline(yintercept = 0) +
+        labs(title = "Residual Plot for Base Model",
+             x = "Fitted Values",
+             y = "Residuals")
+
+ggplot(price.model.step_aug, aes(x = .resid)) +
+        geom_histogram(color = 'white') +
+        labs(title = "Distribution of Residuals",
+             x = "Residuals",
+             y = "Count")
+```
+
+
+* * *
+
+In plotting the residual values, it is evident that there are several outliers. We'll investigate the mechanisms driving these outliers more thoroughly in the next section. 
+<br>
+<br>
+The residuals are distributed normally, and are centered around 0, which gives us confidence in the relative "goodness" of this model's fit.
+
+* * *
+
+#
+
+Which home has the largest squared residual in the previous analysis (Question 4)? Looking at all the variables in the data set, can you explain why this home stands out from the rest (what factors contribute to the high squared residual and why are those factors relevant)?
+
+
+```{r Q5}
+price.model.step_aug <- price.model.step_aug %>% 
+                                mutate(resid_square = (.resid ^ 2)) %>% 
+                                arrange(desc(resid_square))
+
+ggplot(price.model.step_aug, aes(x = .fitted, y = resid_square)) +
+        geom_point(alpha = 0.6) +
+        labs(title = "Squared Residuals Model Fit",
+             x = "Fitted Values",
+             y = "Squared Residual Values")
+
+ames_train %>% 
+        filter(Lot.Area == 9656 & Year.Built == 1923 & Year.Remod.Add == 1970 & Bedroom.AbvGr == 2)
+
+```
+
+* * *
+
+This 1923 single family home is in a state of disrepair. Overall quality and condition for this property are both rated "Poor", which may be due in part to the fact that it has not been remodeled since 1970. The sale condition for this property is listed as "abnormal", which suggests that it may have been forclosed upon. The average price for homes in the Old Town neighborhood is <b>$120,226</b>; the price for this property is far below average for the neighborhood, which certainly contributes to its outlier status. 
+<br>
+<br>
+This property may be a prototypical "fixer-upper" given its condition and low sale price. The size of the home itself (area = 832) is slightly below average for the neighborhood (neighborhood mean = 1405), while the lot area (9656) is slightly above average for the neighborhood (mean = 8731).
+
+* * *
+
+#
+
+Use the same model selection method you chose in Question 4 to again find the best multiple regression model to predict the natural log of home prices, but this time **replacing Lot.Area with log(Lot.Area)**. Do you arrive at a model including the same set of predictors?
+
+
+```{r Q6}
+baseModel <- lm(log(price) ~ log(Lot.Area) + Land.Slope + Year.Built + Year.Remod.Add + Bedroom.AbvGr, data = ames_train)
+
+summary(baseModel)
+
+anova(baseModel)
+
+```
+
+<br>
+We'll follow the same $stepwise$ approach that we used previously.
+<br>
+
+```{r message=FALSE}
+baseModel.step <- step(baseModel)
+
+baseModel.step.aug <- augment(baseModel.step)
+
+```
+
+```{r echo=F, message=F}
+ggplot(baseModel.step.aug, aes(x = .fitted, y = .resid)) +
+        geom_point(alpha = 0.6) +
+        geom_hline(yintercept = 0) +
+        labs(x = "Fitted Values",
+             y = "Resdiaul Values")
+
+ggplot(baseModel.step.aug, aes(x = .resid)) +
+        geom_histogram(color = 'white') +
+        labs(x = "Residual Values",
+             y = "Count")
+```
+
+
+<br>
+Indeed, taking a similar approach yields a highly-predictive model with all of the same predictors included. The adjusted-$R^2$ value for this model is higher when log-transforming Lot Area ($R^2$ = 0.603), which implies that more of the varience in price can be accounted for by the present model.
+
+* * *
+
+#
+
+Do you think it is better to log transform Lot.Area, in terms of assumptions for linear regression? Make graphs of the predicted values of log home price versus the true values of log home price for the regression models selected for Lot.Area and log(Lot.Area). Referencing these two plots, provide a written support that includes a quantitative justification for your answer in the first part of question 7.
+
+```{r Q7, echo=F, message=FALSE}
+
+# Initial Model
+ggplot(price.model, aes(x = log(price), y = Lot.Area)) +
+        geom_point(alpha = 0.5) +
+        geom_smooth(method = "lm") +
+        labs(title = "R-squared = 0.5598",
+             x = "Predicted Home Price",
+             y = "Lot Area (Normal)")
+
+# Updated Model with Log-transformed Lot Area
+ggplot(baseModel, aes(x = log(price), y = log(Lot.Area))) +
+        geom_point(alpha = 0.5) +
+        geom_smooth(method = "lm") +
+        labs(title = "R-squared = 0.6032",
+             x = "Preidcted Home Price",
+             y = "Log-transformed Lot Area")
+
+
+```
+
+* * *
+
+The difference in distrubtion for normal vs. log-transformed lot area is clear. Transforming the Lot Area in the present sample clearly normalizes the distribution, which makes predicition via linear regression much more powerful. This difference is further illustrated in the improvement in adjusted-$R^2$, which is increased by nearly 5% when log-transforming Lot Area.
+<br>
+
+```{r echo=F, message=F}
+
+ggplot(ames_train, aes(x = Lot.Area)) +
+        geom_histogram(color = "white") +
+        labs(x = "Lot Area",
+             y = "Count")
+
+ggplot(ames_train, aes(x = log(Lot.Area))) +
+        geom_histogram(color = "white") +
+        labs(x = "Log-transformed Lot Area",
+             y = "Count")
+
+```
+
+
+
+<br>
+Model with normal Lot Area: $R^2$ = 0.5598
+Model with log(Lot Area): $R^2$ = 0.6032
+<br>
+<br>
+While both models are robust, there is a clear advantage to log-transforming the Lot Area variable in that it provides a significant increase in predictive power.
+
+* * *
