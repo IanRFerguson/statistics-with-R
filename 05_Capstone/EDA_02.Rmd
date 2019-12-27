@@ -1,0 +1,895 @@
+---
+title: "Peer Assessment II"
+output: html_document
+pandoc_args: [
+ "--number-sections",
+]
+---
+Exploratory Data Analysis conducted by Ian Richard Ferguson (<a href = "mailto:irf229@nyu.edu">Email </a>)
+<br>
+
+# Background
+
+<i>As a statistical consultant working for a real estate investment firm, your task is to develop a model to predict the selling price of a given home in Ames, Iowa. Your employer hopes to use this information to help assess whether the asking price of a house is higher or lower than the true value of the house. If the home is undervalued, it may be a good investment for the firm.</i>
+
+# Training Data and relevant packages
+
+<i>In order to better assess the quality of the model you will produce, the data have been randomly divided into three separate pieces: a training data set, a testing data set, and a validation data set. For now we will load the training data set, the others will be loaded and used later.</i>
+
+```{r load, message = FALSE}
+load("ames_train.Rdata")
+```
+
+<i>Use the code block below to load any necessary packages</i>
+
+```{r packages, message = FALSE}
+library(statsr)
+library(tidyverse)
+library(BAS)
+library(MASS)
+library(knitr)
+library(kableExtra)
+library(e1071)
+
+options(width = 200)
+```
+
+## Part 1 - Exploratory Data Analysis (EDA)
+* * *
+
+<b><u>Quantifying Neighborhood Value</u></b>
+<br> <br>
+What's the old adage in real estate? <i>Location, location, location.</i> The first component of the present exploratory data analysis will investigate the degree to which different neighborhoods influence real estate prices. First, we'll stratify the data by neighborhood and calculate the average prices of homes in each geographic region. This process will also offer insight into the <i>spread</i>, or range, of home prices in each neighborhood.
+<br>
+
+```{r distribution-by-neighborhood}
+neighborhood.data <- ames_train %>% 
+                        group_by(Neighborhood) %>% 
+                        summarise(homes.sold = n(),
+                                  avg.price = mean(price, na.rm = T),
+                                med.price = median(price, na.rm = T),
+                                iqr.price = IQR(price, na.rm = T),
+                                avg.area = mean(area, na.rm = T),
+                                med.area = median(area, na.rm = T),
+                                iqr.area = IQR(area, na.rm = T)) %>% 
+                        arrange(desc(med.price))
+```
+
+```{r echo=F}
+kable(neighborhood.data) %>% 
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+<br>
+```{r plotting neighborhoods, echo = FALSE}
+ames_train %>% 
+        group_by(Neighborhood) %>% 
+        ggplot(aes(x = reorder(Neighborhood, +price), y = price)) +
+        geom_boxplot() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              plot.title = element_text(hjust = 0.5),
+              axis.text.y = element_blank()) +
+        labs(title = "Distribution of Price by Neighborhood",
+             x = "Neighborhood",
+             y = "Price")
+```
+
+<br> <br>
+We observe enormous variance in both the average home price and the range of home prices as a result of the neighborhood they were built in. This finding suggests that the `Neighborhood` variable may be useful in eventually predicting home prices - which we'll explore further in the next section of this EDA.
+<br> <br>
+To follow-up on these preliminary results, we'll explore the age of homes in each neighborhood. It's possible that a home's relative age is a moderating factor in the results we observed above (for example, if a given neighborhood consists mostly of new homes <i>and</i> averages higher-priced homes). First, let's spot check the population distribution of home age using the `Year.Built` variable.
+<br> <br>
+```{r echo=F}
+ames_train %>% 
+        ggplot(aes(x = Year.Built)) +
+        geom_histogram(color = 'white', binwidth = 2.5) +
+        labs(x = "Year Built", y = "")
+```
+<br>
+This distribution shows a clear trend, such that a surge of new homes were built following World War II (between 1945 and 1955). A second wave of new homes were built in the late 1980's - perhaps at the time that Baby Boomers' children were coming of age and starting families of their own. Next, we'll stratify the data by neighborhood to test our hypothesis that the average age of homes moderates home prices by neighborhood.
+<br>
+```{r}
+home.age <- ames_train %>% 
+        group_by(Neighborhood) %>% 
+        summarise(homes.sold = n(),
+                  oldest = min(Year.Built),
+                  median.age = round(median(Year.Built)),
+                  newest = max(Year.Built)) %>% 
+        arrange(desc(median.age))
+```
+
+```{r echo=F}
+kable(home.age) %>% 
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+home.age$median.age <- as.numeric(home.age$median.age)
+
+ggplot(home.age, aes(x = reorder(Neighborhood, +median.age), y = median.age)) +
+        geom_col() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        coord_cartesian(ylim = c(1910, 2008)) +
+        labs(x = "Neighborhood", y = "Median Age")
+```
+<br> <br>
+Certainly, this plot confirms that not all neighborhoods in the present sample consist of modern homes. Old Town lives up to its name, as it holds the oldest median age of any home in the sample. It stands to reason, therefore, that `Neighborhood` and `Year.Built` may covary. Lastly, we'll spot check the top- and bottom-three neighborhoods for median prices, which may gleam insight into this interaction.
+<br>
+```{r}
+spot.check <- ames_train %>% 
+                group_by(Neighborhood) %>% 
+                filter(Neighborhood %in% c("OldTown","IDOTRR","BrkSide","Somerst","Blmngtn","NridgHt")) %>% 
+                summarise(median.price = median(price, na.rm = T)) %>% 
+                arrange(desc(median.price))
+```
+
+```{r echo=F}
+kable(spot.check) %>% 
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+
+<br>
+While this relationship doesn't appear to be perfectly linear, it does seem to be at least moderately robust. We'll keep this in mind as we move forward with the analysis.
+<br> <br> <br>
+
+<b><u>Added Value Via Renovation</u></b>
+<br> <br>
+It stands to reason that homes that have been renovated may command a higher market value - fewer structural problems, updated appliances and amenities, etc. To explore whether or not home renovation plays a role in mediating home values, we'll create a new variable called `reno` that will identify homes with a remodel year matching the build year.
+<br>
+
+```{r relative age}
+ames_train <- ames_train %>% 
+        mutate(reno = ifelse(Year.Built != Year.Remod.Add, "Renovated", "Not Renovated"))
+
+ames_train$reno = as.factor(ames_train$reno)
+
+reno.view <- ames_train %>%
+                group_by(reno) %>% 
+                summarise(homes.sold = n(),
+                          median.price = median(price, na.rm = T),
+                          iqr.price = IQR(price, na.rm = T))
+```
+
+```{r plot renovations, echo=F}
+kable(reno.view) %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+        
+
+ggplot(ames_train, aes(x = reno, y = price, fill = reno)) +
+        geom_boxplot() +
+        scale_fill_brewer(palette = "Set1", direction = -1) +
+        theme(axis.text.y = element_blank()) +
+        labs(x = "", y = "Price")
+```
+<br>
+It appears as though we may be able to rule out home renovation as a critical factor in the present data set. Perhaps Ames, Iowa is inhabited by DIY-ers, who would rather conduct renovations on their own. At any rate, the median values for renovated and non-renovated homes is nearly identical, which suggests that this factor may not hold very much predictive power.
+<br>
+<br>
+
+
+<b><u>Prime Selling Season</u></b>
+<br> <br>
+Lastly, we'll seek to identify whether certain times of year are more popular for home sales than others. We'll first group the data set by `Mo.Sold` before calculating:
+<br> <br>
+(1) the number of homes sold that month and <br>
+(2) the median sale price for homes that month
+<br>
+
+```{r}
+ames_train$Mo.Sold <- as.factor(ames_train$Mo.Sold)
+
+ames_train$Mo.Sold <- recode(.x = ames_train$Mo.Sold, '1' = "January", '2' = "February",
+                             '3' = "March", '4' = "April", '5' = "May", '6' = "June",
+                             '7' = "July", '8' = "August", '9' = "September", '10' = "October",
+                             '11' = "November", '12' = "December")
+
+monthly <- ames_train %>% 
+        group_by(Mo.Sold) %>% 
+        summarise(number.sold = n(),
+                  median.price = median(price, na.rm = T),
+                  iqr.price = IQR(price, na.rm = T)) %>% 
+        arrange(desc(number.sold))
+```
+
+
+```{r echo=F}
+kable(monthly) %>% 
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+monthly %>% 
+        ggplot(aes(x = Mo.Sold, y = number.sold)) +
+        geom_col() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1),
+              axis.text.y = element_blank()) +
+        labs(x = "Month Sold", y = "Number of Homes Sold")
+
+monthly %>% 
+        ggplot(aes(x = Mo.Sold, y = median.price)) +
+        geom_col() +
+        coord_cartesian(ylim = c(135000, 185000)) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+        labs(x = "Month Sold", y = "Median Price")
+```
+
+<br>
+We observe that summer months appear to be a significantly more popular time of year to buy homes. However, it does not appear that homes sold during this time command a higher market price. In real estate vernacular, it seems that the summer may be considered a <b>buyer's market</b>, while the winter months may be more advantagous to the seller.
+<br>
+
+* * *
+
+## Part 2 - Development and assessment of an initial model, following a semi-guided process of analysis
+
+### Section 2.1 An Initial Model
+<i>In building a model, it is often useful to start by creating a simple, intuitive initial model based on the results of the exploratory data analysis. (Note: The goal at this stage is **not** to identify the "best" possible model but rather to choose a reasonable and understandable starting point. Later you will expand and revise this model to create your final model.
+
+Based on your EDA, select *at most* 10 predictor variables from “ames_train” and create a linear model for `price` (or a transformed version of price) using those variables. Provide the *R code* and the *summary output table* for your model, a *brief justification* for the variables you have chosen, and a *brief discussion* of the model results in context (focused on the variables that appear to be important predictors and how they relate to sales price).</i>
+
+* * *
+
+The principal goal of this analysis is to construct a linear model to predict home prices in Ames, Iowa. Since we'll be regressing on `price`, let's start by assessing the normality of price distribution across all homes.
+<br>
+```{r echo=F, message=F}
+ggplot(ames_train, aes(x = price)) +
+        geom_histogram(color = 'white') +
+        labs(x = "Price", y = "")
+
+oh.baby <- ames_train %>% 
+        summarise(mean.price = mean(price, na.rm = T),
+                  median.price = median(price, na.rm = T),
+                  skewness = skewness(price))
+
+kable(oh.baby) %>% 
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+```
+
+<br>
+We observe a moderately right-skewed distribution for price values, such that the median price (159467) falls well below the mean (181190). An elegant solution to this - and one that will lend us more predictive power in the model - is to `log-transform` the `price` variable, which will approximate normality in the distribution, as well as making it less sensitive to outliers.
+<br> <br>
+```{r echo=F, message=F}
+ggplot(ames_train, aes(x = log(price))) +
+        geom_histogram(color = 'white') +
+        labs(x = "Log(Price)", y = "")
+
+oh.sugar <- ames_train %>%
+         summarise(mean.price = mean(log(price), na.rm = T),
+                  median.price = median(log(price), na.rm = T),
+                  skewness = skewness(log(price)))
+        
+kable(oh.sugar) %>% 
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+
+```
+
+<br>
+This transformation successfully normalizes the data, as the median and mean values have converged. The log-transformed price values appear to be normally distributed, which will make `log(price)` a much more reliable dependent variable in our linear model.
+<br> <br>
+For our initial model, we'll pick <b>10 variables</b> that we suspect may play a role in predicting sale prices. Some of these variables - `Neighborhood`, `Year.Built`, and `reno` - have been elaborated on in the previous EDA. Others are more intuitive, such as `Overall.Qual`.
+<br>
+
+```{r fit_model}
+basic.model <- lm(log(price) ~ area + Neighborhood + Lot.Config + Overall.Qual + Overall.Cond + Year.Built + reno + TotRms.AbvGrd + Full.Bath + Half.Bath, 
+                  data = ames_train)
+
+summary(basic.model)
+```
+<br>
+As far as naive approaches go, this is an excellent baseline model. We observe an adjusted `R^2` value of <b>0.857</b> in this model, which suggests that nearly 86% of the variance in home prices can be explained by the variables chosen in this model. 
+<br> <br>
+While we observe a number of highly significant predictor variables (area, overall quality, and overall condition to name a few), there are several variables that do not appear to be significantly predictive. To account for those - and potentially increase the predictive power of our model - we will move on to the model selection stage.
+<br>
+
+* * *
+
+### Section 2.2 Model Selection
+
+* * *
+
+Our next step will be to trim down variables that limit the predictive efficacy of our model. We'll contrast two different approaches, starting with 
+<br> <br>
+<b>(1) BIC backward-selection</b>, followed by <br>
+<b>(2) AIC stepwise regression</b>
+<br> <br>
+
+* * *
+
+#### Model One: BIC Backward-Selection
+
+* * *
+
+Our first attempt at model selection will utilize BIC backward-selection. Starting with the full array of regressors, we'll remove regressors at each step until the BIC for the model is at its maximum. This method utilizes `k = log(n)` to penalize free parameters; thus, we'll start by calculating `k` before including it in the model.
+<br>
+
+```{r model_select BIC 1, echo=T}
+k <- log(nrow(ames_train))
+
+basic.bic <- stepAIC(object = basic.model, 
+                     k = k, 
+                     direction = "backward",
+                     trace = F)
+```
+
+
+```{r model_select BIC 2}
+summary(basic.bic)
+```
+
+In this first instance, we see that three non-significant variables were removed from the full model. Unfortunately, this backward-selection does not seem to have improved our adjusted `R^2` value <i>or</i> our residual standard error. This suggests that the present model does not hold any more predcitive power than the model in full.
+<br> <br>
+
+#### Model Two: AIC Stepwise-Regression
+
+* * * 
+
+Our second approach will utilize AIC stepwise regression. In this method, we'll consider <i>adding</i> or <i>subtracting</i> regressors at each step - this will allow us to consider all variables at each step, which gives us confidence that the most robust model will be selected. Unlike BIC regression, our AIC approach will utilize `k = 2` to penalize free parameters; therefore, no need to calculate `k` prior to selecting our regressors.
+<br>
+
+```{r model select AIC 1, echo=T, results='hide'}
+basic.aic <- stepAIC(basic.model, 
+                     k = 2,
+                     direction = "both",
+                     trace = F)
+```
+
+```{r model_select AIC 2}
+summary(basic.aic)
+```
+
+The remaining coefficients in this latter model are nearly identical to those retained in the BIC model, except for its inclusion of `Lot.Config` as a predictive variable. We see a slight improvement in adjusted `R^2` <i>and</i> residual standard error relative to the full model. Given our three options - the full model, BIC model, and AIC model - the latter approach grants us the most robust predictive power.
+<br> <br>
+<mark>We'll proceed by using our <b>AIC Stepwise Regression model</b>.
+
+* * *
+
+### Section 2.3 Initial Model Residuals
+
+* * * 
+
+Next, we'll plot the residuals for the selected model. This will give us some indication of its predictive accuracy; if we observe a non-normative distribution of residual values, it may suggest that the model does a poor job predicting price values.
+<br> <br>
+
+* * *
+
+```{r model_resid, echo=F, message=F}
+ggplot(basic.aic, aes(x = .resid)) +
+        geom_histogram(color = 'white', binwidth = 0.05) +
+        labs(x = "Residual Values", y = "")
+
+ggplot(basic.aic, aes(x = .fitted, y = .resid)) +
+        geom_jitter(alpha = 0.45) +
+        geom_hline(yintercept = 0) +
+        labs(x = "Fitted Values",
+             y = "Residuals")
+```
+
+<br>
+As we can see, the residuals in this plot:
+<br>
+<br>
+<b>(1) Appear relatively symmetrical and are centered near the middle of the plot<br>
+(2) Are clustered near 0 on the y-axis, and<br>
+(3) Do not display a clear pattern or shape </b><br>
+<br>
+<br>
+Between the robust `R^2` value and the normal distribution of residual values, we can move forward with confidence in this model's predictive efficacy.
+<br>
+
+* * *
+
+### Section 2.4 Initial Model RMSE
+
+* * *
+
+Next, we'll check our chosen model's RMSE. This will give us a basic estimate of how our model will perform when applied to data outside of the training set. Since we're regressing on `log(price)`, we'll first need to exponentiate the data. Our RMSE will be interpreted in dollar value, given the context of the present analysis.
+<br> <br>
+
+* * *
+
+```{r model_rmse}
+basic.predictions <- exp(predict(basic.aic, ames_train))
+
+basic.resids <- ames_train$price - basic.predictions
+
+basic.rmse <- sqrt(mean(basic.resids^2))
+
+paste("Basic Model RMSE: $", round(basic.rmse,2), sep = "")
+```
+
+The RMSE for the present model translates to $34,384.39. This value may be interpreted as the standard deviation of the unexplained variance (or prediction errors) in the present model. Considering the range of home prices in the current data set - 12,789 dollars to 615,000 dollars - this RMSE value is <b><i>acceptable</i></b>, as it is relatively low in the context of the grand data set. 
+
+* * *
+
+### Section 2.5 Overfitting 
+
+<i>The process of building a model generally involves starting with an initial model (as you have done above), identifying its shortcomings, and adapting the model accordingly. This process may be repeated several times until the model fits the data reasonably well. However, the model may do well on training data but perform poorly out-of-sample (meaning, on a dataset other than the original training data) because the model is overly-tuned to specifically fit the training data. This is called “overfitting.” To determine whether overfitting is occurring on a model, compare the performance of a model on both in-sample and out-of-sample data sets. To look at performance of your initial model on out-of-sample data, you will use the data set `ames_test`.</i>
+
+```{r loadtest, message = FALSE}
+load("ames_test.Rdata")
+```
+
+<i>Use your model from above to generate predictions for the housing prices in the test data set.  Are the predictions significantly more accurate (compared to the actual sales prices) for the training data than the test data?  Why or why not? Briefly explain how you determined that (what steps or processes did you use)?</i>
+
+* * *
+
+Crucially, our selected model has been constructed to match a very specific geographic area. We <b><u>cannot</u></b> use this model to predict house prices for neighborhoods outside of those included in the training data set. While other approaches to solving this problem are viable - calculating effect size of `Neighborhood`, for example - we will simply omit those data points for the sake of parsimony.
+<br> <br>
+Since the `basic.aic` model does not include the Landmark neighborhood as a factor level, we must first clean the set so the data and model are homogenous. We'll then use the model to predict `log(price)` values in the test data set, before adding the predicted values to the original dataframe for comparison.
+
+```{r initmodel_test}
+ames_test <- ames_test %>% 
+        filter(Neighborhood != "Landmrk")
+
+test.values <- exp(predict(basic.aic, ames_test))
+
+ames_test['predicted'] = test.values
+```
+
+```{r echo=F, message=F}
+ggplot(ames_test, aes(x = price, y = predicted)) +
+        geom_point(alpha = 0.45) +
+        geom_smooth() +
+        labs(x = "Actual Values",
+             y = "Predicted Vales")
+```
+
+<br>
+Pretty as a picture. Applying the selected model to the test data set provides evidence for its effectiveness. We see a tight cluster of data around the line of best fit, with very few data points straying too far from the line - this can be interpreted as a success of the model selection process.
+<br>
+
+* * *
+
+## Part 3 Development of a Final Model
+
+<i>Now that you have developed an initial model to use as a baseline, create a final model with *at most* 20 variables to predict housing prices in Ames, IA, selecting from the full array of variables in the dataset and using any of the tools that we introduced in this specialization.  
+
+Carefully document the process that you used to come up with your final model, so that you can answer the questions below.</i>
+
+* * *
+
+### Building the Model
+
+* * * 
+
+The present data set consists of 82 variables, some of them more valuable than others. To begin building our final model, we'll need to first identify and remove variables that will not significantly contribute to predicting home prices.
+<br>
+
+```{r}
+# Identify variables with lots of missing data
+which(sapply(ames_train, function(x) (sum(is.na(x)) >= 50)))
+
+# Identify factors with < 2 unique levels ... add these to running list
+which(sapply(ames_train, function(x) (is.factor(x)) & length(unique(x))<2)) 
+
+# Assign poorly represented variables to string vector + create new dataset without these variables included
+bad.variables <- c("Lot.Frontage", "Alley", "Fireplace.Qu", "Pool.QC", "Fence", "Misc.Feature", "Utilities")
+
+clean.data <- ames_train[, !(names(ames_train) %in% bad.variables)]
+
+# Remove incomplete cases from new data set
+clean.data <- na.omit(clean.data)
+
+```
+
+<br>
+This process leaves us with only 767 observations from the original dataset, but by trimming out poorly represented variables and incomplete cases we may afford ourselves a slight boost in predictive power moving forward.
+<br> <br>
+
+
+```{r }
+# Base model including all variables (besides instance identifier, which is meaningless at a predictive level)
+final.model <- lm(log(price) ~ . -PID, 
+                  data = clean.data)
+
+# Replace skewed variables with natural log-transformed versions
+final.model <- update(final.model, . ~ . -area -Lot.Area -X1st.Flr.SF
+                      +log(area) +log(Lot.Area) +log(X1st.Flr.SF))
+
+# Remove extraneous variables via stepwise regression
+final.step <- stepAIC(final.model,
+                      direction = "both", 
+                      k = 2,
+                      trace = F)
+
+initial.call <- final.step$call
+
+# Print adjusted R^2 value for reduced model
+initial.r2 <- summary(final.step)$adj.r.squared
+
+paste(round(initial.r2 * 100, 2), "% Explained Variance", sep = "")
+
+```
+
+<br> <br>
+This intial model is extremely robust, and broadly speaking this would be more than sufficient in a real-world context. However, given the maximum number of coefficients allowed in this assignment (20), we will work to cut down on extraneous coefficients while maximizing the model's adjusted `R^2` value. Calling the `summary` function on the present model, we'll identify less-significant regressors and will remove them from the final model.
+<br ><br>
+
+```{r}
+summary(final.step)
+```
+<br> <br>
+Specifically, we'll anchor on the <b>most-significant</b> level per factor. As long as one level of the factor is highly robust, we'll consider it important to the efficacy of the model (at least for the time being). We'll remove non-significant regressors from the model, using `p < 0.05` as a bare minimum significance level.
+<br> <br>
+
+```{r}
+final.step <- update(final.step, . ~ . -Lot.Shape -Lot.Config -Condition.1 -Condition.2 -Year.Remod.Add
+                     -Exter.Qual -Exter.Cond -BsmtExposure -Heating -X2nd.Flr.SF -Bedroom.AbvGr -Functional
+                     -Fireplaces -Garage.Cars -Wood.Deck.SF -Enclosed.Porch -X3Ssn.Porch -Sale.Type)
+
+x <- (summary(final.step)$adj.r.squared) * 100
+
+paste(round(x, 2), "% Explained Variance", sep = "")
+```
+
+<br>
+We'll repeat this process, until we arrive at a model with 20 coefficients.
+<br>
+
+```{r}
+final.step <- update(final.step, . ~ . -Bsmt.Exposure -BsmtFin.SF.2 -Bsmt.Unf.SF -Heating.QC)
+
+x <- (summary(final.step)$adj.r.squared) * 100
+
+paste(round(x, 2), "% Explained Variance", sep = "")
+```
+
+<br>
+<mark>Our final model explains <b>91.38%</b> of the variance in house prices in Ames, IA. </mark>
+<br>
+
+### Section 3.1 Final Model
+
+<i>Provide the summary table for your model.</i>
+
+* * *
+
+```{r model_playground}
+summary(final.step)
+```
+
+* * *
+
+### Section 3.2 Transformation
+
+<i>Did you decide to transform any variables?  Why or why not? Explain in a few sentences.</i>
+
+* * *
+
+This analysis includes several transformations. Intuitively, the area and lot area of a home should be somewhat predictive of its eventual sales price - larger homes ought to command higher prices. This relationship is moderately robust:
+<br>
+
+```{r model_assess}
+paste("Correlation between Price and Area:", round(cor(log(ames_train$price), ames_train$area), 2))
+```
+
+<br>
+However, the initial models constructed for this assignment <b><i>did not</i></b> indicate that area was a significant predictor of a homes price when included in a linear model. For that reason, we <b>log-transformed</b> the area variable to approximate normality.
+<br>
+
+```{r norm vs. log}
+area.values <- ames_train %>% 
+                summarise(normal.area.median = median(area),
+                  normal.area.mean = mean(area),
+                  log.area.median = median(log(area)),
+                  log.area.mean = mean(log(area)))
+```
+
+
+```{r echo=F, message=F}
+kable(area.values) %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+        
+
+ggplot(ames_train, aes(x = area)) +
+        geom_histogram(color = 'white') +
+        labs(x = "Area",
+             y = "")
+
+ggplot(ames_train, aes(x = log(area))) +
+        geom_histogram(color = 'white') +
+        labs(x = "Log(Area)",
+             y = "")
+```
+
+<br>
+As we can see, the distribution of `area` values is right-skewed, such that the majority of data points falls below the mean value. Log-transforming the `area` variable accounts for this skewness, which makes it a more effective regressor in the context of our model.
+<br> <br>
+We repeated this process for the `Lot.Area` and `X1st.Floor.SF` variables for the same reason, as these variables logically factor in to a home's sale price. All three of these variables retained significance throughout the stepwise regression process, and were included in the final model.
+<br>
+
+* * *
+
+### Section 3.3 Variable Interaction
+
+<i>Did you decide to include any variable interactions? Why or why not? Explain in a few sentences.</i>
+
+* * *
+
+<br>
+The present model <i>does not</i> include any variable interactions. This is mainly for the sake of parsimony - we achieved a highly robust `R^2` value without including any interactions, and ultimately the simpler and more streamlined a model the better. While it's theoretically possible that an interaction would marginally improve the efficacy of the model, this parsimonious approach has facilitated a robust model as is.
+<br>
+
+* * *
+
+### Section 3.4 Variable Selection
+
+<i>What method did you use to select the variables you included? Why did you select the method you used? Explain in a few sentences.</i>
+
+* * *
+
+We arrived at the final model using AIC stepwise regression, in which each regressor is considered at every step - this method is more effective than backward-only-selection, as it does not permanently remove a regressor from consideration. Using the `basic.aic` model developed in section two as a baseline, the `final.step` model starts with the majority of exploratory variables considered, and adds and removes variables stepwise until the most robust model possible remains. The addition of these addition variables makes a quantitative difference in the efficacy of the model - see the difference between the basic and final models below:
+<br>
+
+```{r model_select}
+basic <- round(summary(basic.aic)$adj.r.squared * 100, 2)
+final <- round(summary(final.step)$adj.r.squared * 100, 2)
+improved <- final - basic
+
+paste("Basic Model Explained Variance: ", basic, "%", sep = "")
+paste("Final Model Explained Variance: ", final, "%", sep = "")
+paste("Improvement: ", improved, "%", sep = "")
+```
+<br>
+A 5.67% increase in explained variance is huge, and certainly provides evidence to support our methodological approach. 
+<br> <br>
+Notably, the stepwise regression model initially yielded a model with even more predictive power than our final model. Eliminating regressors to comply with the requirements of this assignment deteriorated the adjusted `R^2` value of the final model, albeit slightly.
+<br>
+```{r}
+massive <- round(initial.r2 * 100, 2)
+paste("Final Model Without Variable Subtraction: ", massive, "% Explained Variance", sep = "")
+```
+
+* * *
+
+### Section 3.5 Model Testing
+
+<i>How did testing the model on out-of-sample data affect whether or how you changed your model? Explain in a few sentences.</i>
+
+* * *
+
+Our basic model was relatively successful in predicting real estate prices in Ames. However, we yielded a higher-than-desired RSME values. $34,384 is certainly not an insignificant average squared residual - this suggests that the average prediction error is higher than we would like. All things being equal, we'd hope that adding more significant regressors would afford us a boost in `R^2`, which would reduce our average residuals. <br>
+
+```{r model_testing, message=F, warning=F}
+ames_test <- ames_test %>% 
+        filter(Exterior.2nd != "AsphShn" & Exterior.2nd != "Stone")
+
+ames_test['final.predictions'] <- exp(predict(final.step, ames_test))
+```
+
+```{r echo=F, message=F, warning=F}
+ggplot(ames_test, aes(x = final.predictions)) +
+        geom_histogram(color = 'white') +
+        labs(x = "Predicted Prices via Final Model", y = "")
+
+ggplot(ames_test, aes(x = price, y = final.predictions)) +
+        geom_point(alpha = 0.45) +
+        geom_smooth() +
+        labs(x = "Actual Prices", y = "Predicted Prices")
+```
+<br>
+The slight curvature of the regression light indicates that the model is following the trend (as opposed to being strictly linear). This suggests that our model has been improved from its first iteration - we'll confirm this by calculating the updated RSME in section 4.2.
+
+* * *
+
+## Part 4 Final Model Assessment
+
+### Section 4.1 Final Model Residual
+
+<i>For your final model, create and briefly interpret an informative plot of the residuals.</i>
+
+* * *
+
+Next, we'll plot the distribution of residual values in the final model.
+
+```{r echo=F}
+ggplot(final.step, aes(x = .resid)) +
+        geom_histogram(color = 'white', binwidth = 0.05) +
+        labs(x = "Distribution of Residuals")
+
+ggplot(final.step, aes(x = .fitted, y = .resid)) +
+        geom_point(alpha = 0.45) +
+        geom_hline(yintercept = 0) +
+        labs(x = "Fitted Values",
+             y = "Residual Values")
+```
+
+<br>
+Much like our training model, the residuals in the final model are clearly normally distributed. Plotted against the fitted values, the residuals in this model show no defined pattern, are centered around the y-intercept line, and appear to be fairly symmetrical. This suggests that the final model's predictive power does not have a "blind spot", so to speak.
+<br>
+
+* * *
+
+### Section 4.2 Final Model RMSE
+
+<i>For your final model, calculate and briefly comment on the RMSE.</i>
+
+* * *
+
+Using predicted values from the test data, we'll calculate the RMSE for our final model.
+<br>
+
+```{r message=F, warning=F}
+final.predictions <- exp(predict(final.step, ames_test))
+
+final.resids <- ames_test$price - final.predictions
+
+final.rmse <- sqrt(mean(final.resids^2, na.rm = T))
+
+paste("Final Model RMSE in Test Data: $", round(final.rmse, 2), sep = "")
+```
+
+<br>
+Compared to the RMSE in our test model, this value is markedly improved. We observe a mean standard error of $21,485.24 in predicting price. This is not an insignificant level of error, but in the context of the data it is certainly acceptable.
+<br>
+
+```{r}
+paste("Basic Model RMSE in Test Data: $", round(basic.rmse, 2), sep = "")
+
+paste("Improvment in RMSE: $", round(basic.rmse - final.rmse, 2), sep = "")
+```
+
+<br>
+In the context of our data, our final model predicts home prices $12,899.15 more accurately.
+<br>
+
+* * *
+
+### Section 4.3 Final Model Evaluation
+
+<i>What are some strengths and weaknesses of your model?</i>
+
+* * *
+
+<b><u>Strengths</u></b> <br>
+A major strength of this model is its <i>variety</i> of regressors. We've included variables ranging from garage quality to neighborhood to year of construction:
+
+```{r}
+final.step$call
+```
+<br>
+The inclusion of this range of variables boosts the model's ecological validity, as it paints a much broader image of the property in question (as opposed to only factoring in one component of the home; e.g., only factoring in the exterior qualities of a home).
+<br>
+<br>
+
+<b><u>Weaknesses</u></b> <br>
+Notably, we observed the most robust adjusted `R^2` value following the initial stepwise regression. For the sake of this assignment, we trimmed the number of regressors down to 20, despite the loss in predictive power afforded to this massive model. 
+
+```{r}
+initial.call
+
+paste(round(initial.r2 * 100, 2), "% Explained Variance", sep = "")
+```
+
+<br>
+In a real-world context, we may decide to retain these extra variables rather than remove them. Regardless, our final model retained a majority of its predictive efficacy, so this weakness is only marginally significant.
+<br> <br>
+Another weakness of this model is the exclusion of several factor levels. This is ultimately necessary, as the factor levels in question were not represented in the training data. However, this lack of representation somewhat limits the applicability of the model, such that it becomes more narrow.
+<br>
+
+* * *
+
+### Section 4.4 Final Model Validation
+
+<i>Testing your final model on a separate, validation data set is a great way to determine how your model will perform in real-life practice. 
+
+You will use the “ames_validation” dataset to do some additional assessment of your final model. Discuss your findings, be sure to mention:
+* What is the RMSE of your final model when applied to the validation data?  
+* How does this value compare to that of the training data and/or testing data?
+* What percentage of the 95% predictive confidence (or credible) intervals contain the true price of the house in the validation data set?  
+* From this result, does your final model properly reflect uncertainty?</i>
+
+```{r loadvalidation, message = FALSE}
+load("ames_validation.Rdata")
+```
+
+* * *
+
+The final step in this EDA will be to validate the selected model on an indpendent data set to confirm its predictive efficacy. Given the high `R^2` value and relatively low RMSE value, we should expect the model to perform quite well.
+<br> <br>
+First, we'll check the number of observations in the validation data set:
+<br>
+```{r}
+paste(nrow(ames_validation), "observations")
+```
+
+<br>
+This data set is slightly smaller than our training set, though this shouldn't affect our ability to predict real estate prices. Like we did with the test data earlier, we'll need to match the model to the data - again, <b><u>we cannot</u></b> bootstrap a regression model to fit factors it does not have.
+<br>
+
+```{r}
+ames_validation <- ames_validation %>% 
+        filter(MS.Zoning != "A (agr)") %>% 
+        filter(Exterior.2nd != "CBlock" & Exterior.2nd != "PreCast" & Exterior.2nd != "Stone")
+
+paste(nrow(ames_validation), "observations")
+```
+
+<br>
+6 observations in the validation data set will be excluded to create harmony between the data and the model.
+<br>
+
+* * *
+
+#### Fitting the Model
+
+* * * 
+
+We'll follow the same process as we have previously to exponentiate the predicted sale prices in the validation data set.
+
+```{r model_validate, message=F}
+ames_validation['predicted.values'] <- exp(predict(final.step, ames_validation))
+```
+
+```{r echo=F, message=F, warning=FALSE}
+ggplot(ames_validation, aes(x = price, y = predicted.values)) +
+        geom_point(alpha = 0.45) +
+        geom_smooth() +
+        labs(x = "Actual Values", y = "Predicted Values")
+```
+
+<br>
+As we anticipated, the model provides an excellent fit to this data set. We observe a tight cluster of data around the regression line, with few data points landing far away from the group. Additionally, the slight curve of the regression line near the maximum limit of the x-axis suggests that the model accurately follows the trend of the data - in other words, it is not strictly linear and instead "bends" to fit the data.
+<br>
+
+* * *
+
+#### RMSE
+
+* * *
+
+As we have observed in the test data set, the final model yields a lower RMSE value than the test model - this suggests that the final model will perform better when applied to novel data. We'll calculate this value to confirm.
+<br>
+```{r message=F, warning=FALSE}
+# Exponentiate the data
+valid.predictions <- exp(predict(final.step, ames_validation))
+
+valid.resids <- ames_validation$price - valid.predictions
+
+valid.squares <- valid.resids^2
+
+valid.rmse <- sqrt(mean(valid.squares, na.rm = T))
+
+paste("Validation RMSE: $", round(valid.rmse, 2), sep = "")
+```
+<br>
+Indeed, relative to the test model, the final model yields a much lower RMSE value. We can interpret this as less anticipated error in fitting our model. $18915.64 is a very tolerable value in this case, especially given the variance in home prices in the validation data.
+<br>
+```{r}
+val.priceRange <- range(ames_validation$price)
+
+paste("Price Range in Validation Data Set: $", val.priceRange[2] - val.priceRange[1], sep = "")
+```
+
+<br>
+Broadly speaking, the final model is a better, more accurate predictor of real estate prices than the test model.
+<br>
+
+* * *
+
+#### Confidence Intervals
+
+* * *
+
+Lastly, we'll calculate 95% confidence intervals for each observation in the data set - 757 intervals, in other words. We'll then calculate the coverage probability of the chosen model - this value reflects the probability that predicted values derived from this model are within the observed interval.
+<br>
+```{r confidence intervals, message=F, warning=F}
+# Calculate 95% confidence interval for each observation
+predicted.values.ci <- exp(predict(final.step, ames_validation, interval = "prediction", level = 0.95))
+
+# Calculate proportion of homes with prices within CI
+coverage.probability <- mean(ames_validation$price > predicted.values.ci[, "lwr"] &
+                                     ames_validation$price < predicted.values.ci[, "upr"], na.rm = T) * 100
+
+paste(round(coverage.probability, 2), "% Coverage Probability", sep = "")
+```
+<br>
+Like the rest of this model, this value is robust. We observe that there is <b>less than a 4% chance</b> that predicted values derived from this model fall outside of a 95% confidence interval.
+<br>
+
+* * *
+
+## Part 5 Conclusion
+
+<i>Provide a brief summary of your results, and a brief discussion of what you have learned about the data and your model.</i>
+
+* * *
+
+The final model in the present analysis offers a highly accurate means of predicting real estate prices in Ames, IA. Using a seperate validation data set, we observe a coverage probability of 96.28%, while only 8.62% of the variance in real estate prices remains unexplained. Ames is observed to be a relatively diverse real estate market, marked by ample variability in price, square footage, and age, to name a few factors. Given this variability, the predictive efficacy of our model is that much more important. 
+
+* * *
